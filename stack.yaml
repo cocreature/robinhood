@@ -1,3 +1,6 @@
 resolver: nightly-2018-05-06
 packages:
 - .
+extra-deps:
+- primitive
+- prim-ref-0.1
