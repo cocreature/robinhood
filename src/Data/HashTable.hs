@@ -9,6 +9,7 @@ module Data.HashTable
   , Bucket(..)
 
   , HashTable(..)
+  , IOHashTable
 
   , new
   , insert
@@ -54,7 +55,9 @@ data HashTable s k v = HashTable
   , buckets :: {-# UNPACK #-}!(MutVar s (MutableArray s (Bucket k v)))
   , numItems :: {-# UNPACK #-}!(PrimRef s Int)
   , numTombstones :: {-# UNPACK #-}!(PrimRef s Int)
-  }
+  } deriving Eq
+
+type IOHashTable k v = HashTable (PrimState IO) k v
 
 new :: PrimMonad m => Int -> m (HashTable (PrimState m) k v)
 new initSize = do
@@ -66,8 +69,11 @@ new initSize = do
   init table initSize
   pure table
 
+isPowerOfTwo :: Int -> Bool
+isPowerOfTwo i = i .&. (i - 1) == 0
+
 init :: PrimMonad m => HashTable (PrimState m) k v -> Int -> m ()
-init table initSize = assert (initSize > 0) $ do
+init table initSize = assert (isPowerOfTwo initSize) $ do
   hs <- newPrimArray initSize
   setPrimArray hs 0 initSize emptyHash
   writeMutVar (hashes table) hs
@@ -77,19 +83,32 @@ init table initSize = assert (initSize > 0) $ do
   writePrimRef (numItems table) 0
   writePrimRef (numTombstones table) 0
 
+-- | @lookupBucketFor k table@ returns the bucket that @k@ belongs to.
+--
+-- In addition to that it also has a few side effects:
+--
+-- * It inserts the hash of @k@ in the table.
+--
+-- * It decrements the number of tombstones if a tombstone is
+--   overwritten.
+--
+-- * It increments the number of items if the key was not already present.
 lookupBucketFor :: (Eq k, Hashable k, PrimMonad m) => k -> HashTable (PrimState m) k v -> m Int
 lookupBucketFor a table = do
+  initialHs <- readMutVar (hashes table)
+  let !initialNumBuckets = sizeofMutablePrimArray initialHs
+  when (initialNumBuckets == 0) $ init table 16
   hs <- readMutVar (hashes table)
   bs <- readMutVar (buckets table)
   let !numBuckets = sizeofMutablePrimArray hs
-  when (numBuckets == 0) $ init table 16
   start <- bucketIndex table h
   let -- Since the table is not completely empty at this point, there
       -- will be at least one empty bucket which will serve as the
       -- stopping condition.
       go !i !firstTombstone = do
         bucketHash <- readPrimArray hs i
-        if | bucketHash == emptyHash ->
+        if | bucketHash == emptyHash -> do
+             modifyPrimRef (numItems table) (+ 1)
              if firstTombstone /= -1
                then do
                  modifyPrimRef (numTombstones table) (subtract 1)
@@ -127,7 +146,6 @@ modifyPrimRef r f = do
 insert :: (Eq k, Hashable k, PrimMonad m) => k -> v -> HashTable (PrimState m) k v -> m ()
 insert k v table = do
   i <- lookupBucketFor k table
-  modifyPrimRef (numItems table) (+ 1)
   bs <- readMutVar (buckets table)
   writeArray bs i (Bucket k v)
   rehash table
