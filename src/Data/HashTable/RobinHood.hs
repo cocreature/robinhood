@@ -93,6 +93,7 @@ data VacantType
 
 data BucketType = Occupied | Vacant !VacantType
 
+{-# INLINABLE bucketFor #-}
 bucketFor :: (Eq k, PrimMonad m) => HashTable (PrimState m) k v -> SafeHash -> k -> m (Int, BucketType)
 bucketFor table h k = do
   hs <- readMutVar (hashes table)
@@ -122,6 +123,7 @@ bucketIndex :: Int -> SafeHash -> Int
 bucketIndex numBuckets (SafeHash h) = h .&. (numBuckets - 1)
 
 -- | Insert a new key/value pair in the hash table.
+{-# INLINABLE insert #-}
 insert :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> v -> m ()
 insert table k v = do
   reserve table 1
@@ -141,6 +143,7 @@ insert table k v = do
   where
     !h = safeHash k
 
+{-# INLINABLE robinHood #-}
 robinHood :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> SafeHash -> k -> v -> Int -> Int -> m ()
 robinHood hs bs hash key value pos disp = go hash (Bucket key value) pos disp
   where
@@ -172,28 +175,33 @@ nextPowerOfTwo i = 2 ^ (logBase2 (i - 1) + 1)
 logBase2 :: Int -> Int
 logBase2 x = finiteBitSize x - 1 - countLeadingZeros x
 
+{-# INLINABLE getEntry #-}
 getEntry :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> Int -> m (SafeHash, Bucket k v)
 getEntry hs bs i = do
   h <- readPrimArray hs i
   b <- readArray bs i
   pure (h, b)
 
+{-# INLINABLE setEntry #-}
 setEntry :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> Int -> SafeHash -> Bucket k v -> m ()
 setEntry hs bs i h b = do
   writePrimArray hs i h
   writeArray bs i b
 
+{-# INLINABLE deleteEntry #-}
 deleteEntry :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> Int -> m ()
 deleteEntry hs bs i = do
   writePrimArray hs i emptyHash
   writeArray bs i undefined
 
+{-# INLINABLE swapEntry #-}
 swapEntry :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> Int -> SafeHash -> Bucket k v -> m (SafeHash, Bucket k v)
 swapEntry hs bs i h b = do
   (h', b') <- getEntry hs bs i
   setEntry hs bs i h b
   pure (h', b')
 
+{-# INLINABLE reserve #-}
 reserve :: PrimMonad m => HashTable (PrimState m) k v -> Int -> m ()
 reserve table additionalElems = do
   hs <- readMutVar (hashes table)
@@ -224,6 +232,7 @@ reserve table additionalElems = do
       go start currentNumItems
 
 -- | Lookup the value at a key in the hash table.
+{-# INLINABLE lookup #-}
 lookup :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> m (Maybe v)
 lookup table k = do
   mayI <- findKey k table
@@ -234,6 +243,7 @@ lookup table k = do
       Bucket _ v <- readArray bs i
       pure (Just v)
 
+{-# INLINABLE delete #-}
 delete :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> m (Maybe v)
 delete table k = do
   mayI <- findKey k table
@@ -264,6 +274,7 @@ displacement numBuckets hash pos
   | otherwise = pos + (numBuckets - idealPos)
   where !idealPos = bucketIndex numBuckets hash
 
+{-# INLINABLE findKey #-}
 findKey :: (Eq k, Hashable k, PrimMonad m) => k -> HashTable (PrimState m) k v -> m (Maybe Int)
 findKey k table = do
   hs <- readMutVar (hashes table)
@@ -290,9 +301,9 @@ findKey k table = do
 nextBucket :: Int -> Int -> Int
 nextBucket numBuckets i = (i + 1) .&. (numBuckets - 1)
 
-
 -- | Assumes that the size of the array is not 0 and that it contains
 -- at least one element with ideal placement.
+{-# INLINABLE firstIdeal #-}
 firstIdeal :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> m Int
 firstIdeal hs = go 0
   where
@@ -305,6 +316,7 @@ firstIdeal hs = go 0
 
 
 -- | Insertion function used during reinsertion.
+{-# INLINABLE orderedInsert #-}
 orderedInsert :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> SafeHash -> Bucket k v -> m ()
 orderedInsert hs bs h b = go (bucketIndex numBuckets h)
   where
