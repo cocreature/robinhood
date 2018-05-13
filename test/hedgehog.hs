@@ -16,7 +16,6 @@ import qualified Hedgehog.Range as Range
 import           Data.HashTable (IOHashTable)
 import qualified Data.HashTable as HashTable
 
-
 newtype State v =
   State (Maybe (Var (Opaque (IOHashTable Int Int)) v, Map Int Int))
   deriving (Eq, Show)

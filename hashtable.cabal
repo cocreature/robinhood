@@ -36,6 +36,24 @@ test-suite hedgehog
                      , hashtable
                      , hedgehog
 
+executable bench-hashtables
+  hs-source-dirs:      bench
+  main-is:             hashtables.hs
+  default-language:    Haskell2010
+  build-depends:       base
+                     , bytestring
+                     , hashable
+                     , hashtables
+
+executable bench-hashtable
+  hs-source-dirs:      bench
+  main-is:             hashtable.hs
+  default-language:    Haskell2010
+  build-depends:       base
+                     , bytestring
+                     , hashable
+                     , hashtable
+
 source-repository head
   type:     git
   location: https://github.com/cocreature/hashtable
