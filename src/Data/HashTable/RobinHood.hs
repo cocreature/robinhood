@@ -4,7 +4,6 @@ module Data.HashTable.RobinHood
   ( SafeHash(..)
   , safeHash
   , emptyHash
-  , tombstoneHash
 
   , Bucket(..)
 
@@ -17,7 +16,7 @@ module Data.HashTable.RobinHood
   , delete
   ) where
 
-import           Prelude hiding (init, lookup)
+import           Prelude hiding (lookup)
 
 import           Control.Exception
 import           Control.Monad
@@ -31,24 +30,20 @@ import           Data.Primitive.PrimArray
 import           Data.Primitive.PrimRef
 import           Data.Primitive.Types
 
--- | SafeHash needs to be able to store two special values
--- representing empty buckets and tombstones. We accomplish this by
--- setting the 2 highest bits to 1 for all other values.
+-- | SafeHash needs to be able to store a special value representing
+-- empty buckets. We accomplish this by setting the 1 highest bits to
+-- 1 for all other values leaving 0 for `emptyHash`.
 newtype SafeHash = SafeHash Int deriving (Eq, Prim)
 
 {-# INLINABLE emptyHash #-}
 emptyHash :: SafeHash
-emptyHash = SafeHash (1 `shiftL` (finiteBitSize (undefined :: Int) - 1))
-
-{-# INLINABLE tombstoneHash #-}
-tombstoneHash :: SafeHash
-tombstoneHash = SafeHash (1 `shiftL` (finiteBitSize (undefined :: Int) - 2))
+emptyHash = SafeHash 0
 
 {-# INLINABLE safeHash #-}
 safeHash :: Hashable a => a -> SafeHash
 safeHash a =
   let !h = Hashable.hash a
-   in SafeHash ((3 `shiftL` (finiteBitSize (undefined :: Int) - 2)) .|. h)
+   in SafeHash ((1 `shiftL` (finiteBitSize (undefined :: Int) - 1)) .|. h)
 
 data Bucket k v = Bucket !k v
 
@@ -60,32 +55,91 @@ data HashTable s k v = HashTable
 
 type IOHashTable k v = HashTable (PrimState IO) k v
 
+----------------
+-- Public API --
+----------------
+
 -- @new capacity@ creates a new `HashTable` of the given capacity. The
 -- capacity must be 0 or a power of two.
 {-# INLINABLE new #-}
 new :: PrimMonad m => Int -> m (HashTable (PrimState m) k v)
-new initSize = do
-  hs <- newMutVar undefined
-  bs <- newMutVar undefined
-  items <- newPrimRef 0
-  let !table = HashTable hs bs items
-  init table initSize
-  pure table
+new initSize = assert (isPowerOfTwo initSize) $ do
+  hs <- newPrimArray initSize
+  setPrimArray hs 0 initSize emptyHash
+  bs <- newArray initSize undefined
+  HashTable
+    <$> newMutVar hs
+    <*> newMutVar bs
+    <*> newPrimRef 0
+
+-- | Insert a new key/value pair in the hash table.
+{-# INLINABLE insert #-}
+insert :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> v -> m ()
+insert table k v = do
+  reserve table 1
+  (!i, !type') <- bucketFor table h k
+  hs <- readMutVar (hashes table)
+  bs <- readMutVar (buckets table)
+  case type' of
+    Occupied -> writeArray bs i (Bucket k v)
+    Vacant el -> do
+      n <- readPrimRef (numItems table)
+      writePrimRef (numItems table) (n + 1)
+      case el of
+        NoElem -> do
+          writePrimArray hs i h
+          writeArray bs i (Bucket k v)
+        NeqElem disp -> robinHood hs bs h k v i disp
+  where
+    !h = safeHash k
+
+-- | Lookup the value at a key in the hash table.
+{-# INLINABLE lookup #-}
+lookup :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> m (Maybe v)
+lookup table k = do
+  mayI <- findKey k table
+  case mayI of
+    Nothing -> pure Nothing
+    Just i -> do
+      bs <- readMutVar (buckets table)
+      Bucket _ v <- readArray bs i
+      pure (Just v)
+
+-- | Delete the value at a key and return it.
+--
+-- If the key was not present in the hash table, `Nothing` is returned.
+{-# INLINABLE delete #-}
+delete :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> m (Maybe v)
+delete table k = do
+  mayI <- findKey k table
+  case mayI of
+    Nothing -> pure Nothing
+    Just pos -> do
+      numItems' <- readPrimRef (numItems table)
+      writePrimRef (numItems table) (numItems' - 1)
+      hs <- readMutVar (hashes table)
+      bs <- readMutVar (buckets table)
+      Bucket _ v <- readArray bs pos
+      let !numBuckets = sizeofMutablePrimArray hs
+          go i = do
+            let !i' = nextBucket numBuckets i
+            h <- readPrimArray hs i'
+            if | h == emptyHash || displacement numBuckets h i' == 0 ->
+                 deleteEntry hs bs i
+               | otherwise -> do
+                   b <- readArray bs i'
+                   setEntry hs bs i h b
+                   go i'
+      go pos
+      pure (Just v)
+
+----------------------
+-- Internal helpers --
+----------------------
 
 {-# INLINABLE isPowerOfTwo #-}
 isPowerOfTwo :: Int -> Bool
 isPowerOfTwo i = i .&. (i - 1) == 0
-
-{-# INLINABLE init #-}
-init :: PrimMonad m => HashTable (PrimState m) k v -> Int -> m ()
-init table initSize = assert (isPowerOfTwo initSize) $ do
-  hs <- newPrimArray initSize
-  setPrimArray hs 0 initSize emptyHash
-  writeMutVar (hashes table) hs
-  -- We will never access the values if the hash is set to `emptyHash` so this is safe.
-  bs <- newArray initSize undefined
-  writeMutVar (buckets table) bs
-  writePrimRef (numItems table) 0
 
 data VacantType
   = NoElem
@@ -121,27 +175,6 @@ bucketFor table h k = do
 {-# INLINABLE bucketIndex #-}
 bucketIndex :: Int -> SafeHash -> Int
 bucketIndex numBuckets (SafeHash h) = h .&. (numBuckets - 1)
-
--- | Insert a new key/value pair in the hash table.
-{-# INLINABLE insert #-}
-insert :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> v -> m ()
-insert table k v = do
-  reserve table 1
-  (!i, !type') <- bucketFor table h k
-  hs <- readMutVar (hashes table)
-  bs <- readMutVar (buckets table)
-  case type' of
-    Occupied -> writeArray bs i (Bucket k v)
-    Vacant el -> do
-      n <- readPrimRef (numItems table)
-      writePrimRef (numItems table) (n + 1)
-      case el of
-        NoElem -> do
-          writePrimArray hs i h
-          writeArray bs i (Bucket k v)
-        NeqElem disp -> robinHood hs bs h k v i disp
-  where
-    !h = safeHash k
 
 {-# INLINABLE robinHood #-}
 robinHood :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> SafeHash -> k -> v -> Int -> Int -> m ()
@@ -230,43 +263,6 @@ reserve table additionalElems = do
                   (go (nextBucket numBuckets i) (toInsert - 1))
       start <- firstIdeal hs
       go start currentNumItems
-
--- | Lookup the value at a key in the hash table.
-{-# INLINABLE lookup #-}
-lookup :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> m (Maybe v)
-lookup table k = do
-  mayI <- findKey k table
-  case mayI of
-    Nothing -> pure Nothing
-    Just i -> do
-      bs <- readMutVar (buckets table)
-      Bucket _ v <- readArray bs i
-      pure (Just v)
-
-{-# INLINABLE delete #-}
-delete :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> m (Maybe v)
-delete table k = do
-  mayI <- findKey k table
-  case mayI of
-    Nothing -> pure Nothing
-    Just pos -> do
-      numItems' <- readPrimRef (numItems table)
-      writePrimRef (numItems table) (numItems' - 1)
-      hs <- readMutVar (hashes table)
-      bs <- readMutVar (buckets table)
-      Bucket _ v <- readArray bs pos
-      let !numBuckets = sizeofMutablePrimArray hs
-          go i = do
-            let !i' = nextBucket numBuckets i
-            h <- readPrimArray hs i'
-            if | h == emptyHash || displacement numBuckets h i' == 0 ->
-                 deleteEntry hs bs i
-               | otherwise -> do
-                   b <- readArray bs i'
-                   setEntry hs bs i h b
-                   go i'
-      go pos
-      pure (Just v)
 
 displacement :: Int -> SafeHash -> Int -> Int
 displacement numBuckets hash pos
