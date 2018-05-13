@@ -13,8 +13,8 @@ import           Hedgehog.Internal.Config
 import           Hedgehog.Internal.Runner
 import qualified Hedgehog.Range as Range
 
-import           Data.HashTable (IOHashTable)
-import qualified Data.HashTable as HashTable
+import           Data.HashTable.RobinHood (IOHashTable)
+import qualified Data.HashTable.RobinHood as HashTable
 
 newtype State v =
   State (Maybe (Var (Opaque (IOHashTable Int Int)) v, Map Int Int))
@@ -61,7 +61,7 @@ lookup =
       gen (State (Just (table, _))) =
         Just (Lookup table <$> Gen.int (Range.linear (-100) 100))
       execute (Lookup table k) = do
-        liftIO $ HashTable.lookup k (opaque table)
+        liftIO $ HashTable.lookup (opaque table) k
    in Command
         gen
         execute
@@ -84,7 +84,7 @@ insert =
         Just
           (Insert table <$> Gen.int (Range.linear (-100) 100) <*>
            Gen.int (Range.linear (-100) 100))
-      execute (Insert table k v) = liftIO $ HashTable.insert k v (opaque table)
+      execute (Insert table k v) = liftIO $ HashTable.insert (opaque table) k v
    in Command
         gen
         execute
@@ -104,7 +104,7 @@ delete =
   let gen (State Nothing) = Nothing
       gen (State (Just (table, _))) =
         Just (Delete table <$> Gen.int (Range.linear (-100) 100))
-      execute (Delete table k) = liftIO (HashTable.delete k (opaque table))
+      execute (Delete table k) = liftIO (HashTable.delete (opaque table) k)
    in Command
         gen
         execute
@@ -114,11 +114,12 @@ delete =
 
 prop_references_sequential :: Property
 prop_references_sequential =
+  withTests 1000 $
   property $ do
     actions <-
       forAll $
       Gen.sequential
-        (Range.linear 1 500)
+        (Range.linear 1 1000)
         initialState
         [new, lookup, insert, delete]
     executeSequential initialState actions

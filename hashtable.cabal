@@ -1,8 +1,8 @@
-name:                hashtable
+name:                robinhood
 version:             0.1.0.0
--- synopsis:
+synopsis:            Robin Hood hashtable
 -- description:
-homepage:            https://github.com/cocreature/hashtable#readme
+homepage:            https://github.com/cocreature/robinhood#readme
 license:             BSD3
 license-file:        LICENSE
 author:              Moritz Kiefer
@@ -15,7 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Data.HashTable
+  exposed-modules:     Data.HashTable.RobinHood
   build-depends:       base >= 4.11 && < 5
                      , hashable
                      , primitive
@@ -33,8 +33,8 @@ test-suite hedgehog
   default-language:    Haskell2010
   build-depends:       base
                      , containers
-                     , hashtable
                      , hedgehog
+                     , robinhood
 
 executable bench-hashtables
   hs-source-dirs:      bench
@@ -52,7 +52,7 @@ executable bench-hashtable
   build-depends:       base
                      , bytestring
                      , hashable
-                     , hashtable
+                     , robinhood
 
 source-repository head
   type:     git
