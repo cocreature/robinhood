@@ -180,7 +180,7 @@ bucketIndex numBuckets (SafeHash h) = h .&. (numBuckets - 1)
 
 {-# INLINABLE robinHood #-}
 robinHood :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> SafeHash -> k -> v -> Int -> Int -> m ()
-robinHood hs bs hash key value pos disp = go hash (Bucket key value) pos disp
+robinHood hs bs !hash key value pos disp = go hash (Bucket key value) pos disp
   where
     go h b !i !d = do
       (h', b') <- swapEntry hs bs i h b
