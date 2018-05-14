@@ -77,9 +77,9 @@ new initSize = assert (isPowerOfTwo initSize) $ do
 insert :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> v -> m ()
 insert table k v = do
   reserve table 1
-  (!i, !type') <- bucketFor table h k
   hs <- readMutVar (hashes table)
   bs <- readMutVar (buckets table)
+  (!i, !type') <- bucketFor hs bs h k
   case type' of
     Occupied -> writeArray bs i (Bucket k v)
     Vacant el -> do
@@ -148,10 +148,8 @@ data VacantType
 data BucketType = Occupied | Vacant !VacantType
 
 {-# INLINABLE bucketFor #-}
-bucketFor :: (Eq k, PrimMonad m) => HashTable (PrimState m) k v -> SafeHash -> k -> m (Int, BucketType)
-bucketFor table h k = do
-  hs <- readMutVar (hashes table)
-  bs <- readMutVar (buckets table)
+bucketFor :: (Eq k, PrimMonad m) => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> SafeHash -> k -> m (Int, BucketType)
+bucketFor hs bs h k = do
   let !numBuckets = sizeofMutablePrimArray hs
       go !i !currentDisplacement = do
         h' <- readPrimArray hs i
@@ -236,7 +234,7 @@ swapEntry hs bs i h b = do
 
 {-# INLINABLE reserve #-}
 reserve :: PrimMonad m => HashTable (PrimState m) k v -> Int -> m ()
-reserve table additionalElems = do
+reserve table !additionalElems = do
   hs <- readMutVar (hashes table)
   !currentNumItems <- readPrimRef (numItems table)
   let !numBuckets = sizeofMutablePrimArray hs
