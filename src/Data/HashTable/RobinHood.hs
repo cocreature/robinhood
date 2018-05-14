@@ -1,4 +1,6 @@
+{-# LANGUAGE MagicHash #-}
 {-# LANGUAGE TypeInType #-}
+{-# LANGUAGE UnboxedSums #-}
 {-# LANGUAGE UnboxedTuples #-}
 module Data.HashTable.RobinHood
   ( SafeHash(..)
@@ -29,6 +31,7 @@ import           Data.Primitive.MutVar
 import           Data.Primitive.PrimArray
 import           Data.Primitive.PrimRef
 import           Data.Primitive.Types
+import           GHC.Exts
 
 -- | SafeHash needs to be able to store a special value representing
 -- empty buckets. We accomplish this by setting the 1 highest bits to
@@ -79,17 +82,18 @@ insert table k v = do
   reserve table 1
   hs <- readMutVar (hashes table)
   bs <- readMutVar (buckets table)
-  (!i, !type') <- bucketFor hs bs h k
+  BucketFor i type' <- bucketFor hs bs h k
   case type' of
-    Occupied -> writeArray bs i (Bucket k v)
-    Vacant el -> do
+    (# (# #) | | #) -> writeArray bs i (Bucket k v)
+    (# | (# #) | #) -> do
       n <- readPrimRef (numItems table)
       writePrimRef (numItems table) (n + 1)
-      case el of
-        NoElem -> do
-          writePrimArray hs i h
-          writeArray bs i (Bucket k v)
-        NeqElem disp -> robinHood hs bs h k v i disp
+      writePrimArray hs i h
+      writeArray bs i (Bucket k v)
+    (# | | disp #) -> do
+      n <- readPrimRef (numItems table)
+      writePrimRef (numItems table) (n + 1)
+      robinHood hs bs h k v i (I# disp)
   where
     !h = safeHash k
 
@@ -141,32 +145,32 @@ delete table k = do
 isPowerOfTwo :: Int -> Bool
 isPowerOfTwo i = i .&. (i - 1) == 0
 
-data VacantType
-  = NoElem
-  | NeqElem {-# UNPACK #-}!Int
-
-data BucketType = Occupied | Vacant !VacantType
+-- | The Int represents the index of the bucket. The unboxed sum represents (in this order):
+--
+-- 1. A field with a matching key was found.
+-- 2. An empty bucket was found.
+-- 3. We found an element with a smaller displacement. The Int#
+-- represents that displacement.
+data BucketFor = BucketFor {-# UNPACK #-} !Int (# (# #) | (# #) | Int# #)
 
 {-# INLINABLE bucketFor #-}
-bucketFor :: (Eq k, PrimMonad m) => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> SafeHash -> k -> m (Int, BucketType)
+bucketFor :: (Eq k, PrimMonad m) => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> SafeHash -> k -> m BucketFor
 bucketFor hs bs h k = do
   let !numBuckets = sizeofMutablePrimArray hs
       go !i !currentDisplacement = do
         h' <- readPrimArray hs i
         if h' == emptyHash
-          then pure (i, Vacant NoElem)
+          then pure (BucketFor i (# | (# #) | #))
           else do
-            let !storedDisplacement = displacement numBuckets h' i
+            let !storedDisplacement@(I# disp) = displacement numBuckets h' i
             if storedDisplacement < currentDisplacement
-              then pure (i, Vacant (NeqElem storedDisplacement))
+              then pure (BucketFor i (# | | disp #))
               else if h' == h
                      then do
                        Bucket k' _ <- readArray bs i
                        if k' == k
-                         then pure (i, Occupied)
-                         else go
-                                (nextBucket numBuckets i)
-                                (currentDisplacement + 1)
+                         then pure (BucketFor i (# (# #) | | #))
+                         else go (nextBucket numBuckets i) (currentDisplacement + 1)
                      else go (nextBucket numBuckets i) (currentDisplacement + 1)
   go (bucketIndex numBuckets h) 0
 
