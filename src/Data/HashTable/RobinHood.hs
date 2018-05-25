@@ -16,6 +16,7 @@ module Data.HashTable.RobinHood
   , insert
   , lookup
   , delete
+  , fromList
   ) where
 
 import           Prelude hiding (lookup)
@@ -24,14 +25,15 @@ import           Control.Exception
 import           Control.Monad
 import           Control.Monad.Primitive
 import           Data.Bits
+import           Data.Foldable
 import           Data.Hashable (Hashable)
 import qualified Data.Hashable as Hashable
-import           Data.Primitive.Array
+import           Data.Primitive.Array hiding (fromList)
 import           Data.Primitive.MutVar
 import           Data.Primitive.PrimArray
 import           Data.Primitive.PrimRef
 import           Data.Primitive.Types
-import           GHC.Exts
+import           GHC.Exts (Int(..), Int#)
 
 -- | SafeHash needs to be able to store a special value representing
 -- empty buckets. We accomplish this by setting the 1 highest bits to
@@ -136,6 +138,16 @@ delete table k = do
                    go i'
       go pos
       pure (Just v)
+
+-- | Construct a `HashTable` from a list of key-value pairs. For
+-- duplicate keys, the last value is the one stored in the final
+-- hashtable.
+{-# INLINABLE fromList #-}
+fromList :: (Eq k, Hashable k, PrimMonad m) => [(k, v)] -> m (HashTable (PrimState m) k v)
+fromList xs = do
+  table <- new 0
+  for_ xs $ \(k,v) -> insert table k v
+  pure table
 
 ----------------------
 -- Internal helpers --
