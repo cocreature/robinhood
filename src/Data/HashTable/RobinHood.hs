@@ -17,15 +17,18 @@ module Data.HashTable.RobinHood
   , lookup
   , delete
   , fromList
+  , mapM_
+  , size
+  , capacity
   ) where
 
-import           Prelude hiding (lookup)
+import           Prelude hiding (lookup, mapM_)
 
 import           Control.Exception
-import           Control.Monad
+import           Control.Monad hiding (mapM_)
 import           Control.Monad.Primitive
 import           Data.Bits
-import           Data.Foldable
+import           Data.Foldable (for_)
 import           Data.Hashable (Hashable)
 import qualified Data.Hashable as Hashable
 import           Data.Primitive.Array hiding (fromList)
@@ -149,6 +152,32 @@ fromList xs = do
   for_ xs $ \(k,v) -> insert table k v
   pure table
 
+-- | Monadic map over the entries in the `HashTable`. No guarantees
+-- are made about the order in which the entries are traversed.
+{-# INLINABLE mapM_ #-}
+mapM_ :: PrimMonad m => (k -> v -> m a) -> HashTable (PrimState m) k v -> m ()
+mapM_ f table = do
+  hs <- readMutVar (hashes table)
+  bs <- readMutVar (buckets table)
+  for_ [0 .. sizeofMutablePrimArray hs - 1] $ \i -> do
+    h <- readPrimArray hs i
+    when (h /= emptyHash) $ do
+      Bucket k v <- readArray bs i
+      _ <- f k v
+      pure ()
+
+-- | Returns the number of entries that are currently in the
+-- `HashTable`.
+{-# INLINABLE size #-}
+size :: PrimMonad m => HashTable (PrimState m) k v -> m Int
+size table = readPrimRef (numItems table)
+
+-- | Returns the current capacity, i.e., the number of allocated
+-- buckets. This is guaranteed to be greater or equal to `size`.
+{-# INLINABLE capacity #-}
+capacity :: PrimMonad m => HashTable (PrimState m) k v -> m Int
+capacity table = sizeofMutablePrimArray <$> readMutVar (hashes table)
+
 ----------------------
 -- Internal helpers --
 ----------------------
@@ -209,8 +238,8 @@ robinHood hs bs !hash key value pos disp = go hash (Bucket key value) pos disp
     !numBuckets = sizeofMutablePrimArray hs
 
 -- | Load factor of 0.9
-capacity :: Int -> Int
-capacity c = (c * 10 + 10 - 1) `div` 11
+capacity' :: Int -> Int
+capacity' c = (c * 10 + 10 - 1) `div` 11
 
 capacityFor :: Int -> Int
 capacityFor 0 = 0
@@ -255,7 +284,7 @@ reserve table !additionalElems = do
   !currentNumItems <- readPrimRef (numItems table)
   let !numBuckets = sizeofMutablePrimArray hs
       !newNumItems = currentNumItems + additionalElems
-      !remaining = capacity numBuckets - currentNumItems
+      !remaining = capacity' numBuckets - currentNumItems
   when (remaining < additionalElems) $ do
     let !newNumBuckets = capacityFor newNumItems
     bs <- readMutVar (buckets table)
