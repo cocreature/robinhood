@@ -1,7 +1,8 @@
 name:                robinhood
 version:             0.1.0.0
 synopsis:            Robin Hood hashtable
--- description:
+description:         Haskell implementation of a linearly probed hash table
+                     using Robin Hood hashing.
 homepage:            https://github.com/cocreature/robinhood#readme
 license:             BSD3
 license-file:        LICENSE
