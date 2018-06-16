@@ -19,7 +19,7 @@ library
   exposed-modules:     Data.HashTable.RobinHood
   build-depends:       base >= 4.11 && < 5
                      , hashable
-                     , primitive
+                     , primitive >= 0.6.4
                      , prim-ref
   default-language:    Haskell2010
   ghc-options:         -Wall
