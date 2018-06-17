@@ -9,8 +9,14 @@ let
   pkgs = import nixpkgs {};
   haskellPackages = pkgs.haskell.packages.ghc843.override(old: {
     overrides = self: super: {
-      robinhood = super.callCabal2nix "robinhood" ./. {};
+      robinhood = pkgs.haskell.lib.doBenchmark (super.callCabal2nix "robinhood" ./. {});
       primitive = super.callHackage "primitive" "0.6.4.0" {};
+      vector-hashtables = super.callCabal2nix "vector-hashtables" (pkgs.fetchFromGitHub {
+        owner = "klapaucius";
+        repo = "vector-hashtables";
+        rev = "688b5791237919b3054accb0abdeaf8394759e9e";
+        sha256 = "0crn3xzn13kv2vxffr6pf4r55bsnmwrwl32vqnyxf0661r6qly0m";
+      }) {};
     };
   });
 in
