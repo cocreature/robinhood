@@ -20,11 +20,14 @@ module Data.HashTable.RobinHood
   , mapM_
   , size
   , capacity
+
+  -- * Internal utilities
+  , nextPowerOfTwo
+  , logBase2
   ) where
 
 import           Prelude hiding (lookup, mapM_)
 
-import           Control.Exception
 import           Control.Monad hiding (mapM_)
 import           Control.Monad.Primitive
 import           Data.Bits
@@ -67,18 +70,18 @@ type IOHashTable k v = HashTable (PrimState IO) k v
 -- Public API --
 ----------------
 
--- @new capacity@ creates a new `HashTable` of the given capacity. The
--- capacity must be 0 or a power of two.
+-- @new capacity@ creates a new `HashTable` of the given capacity.
 {-# INLINABLE new #-}
 new :: PrimMonad m => Int -> m (HashTable (PrimState m) k v)
-new initSize = assert (isPowerOfTwo initSize) $ do
+new requestedSize = do
+  let initSize =
+        if requestedSize < 0
+          then 0
+          else nextPowerOfTwo requestedSize
   hs <- newPrimArray initSize
   setPrimArray hs 0 initSize emptyHash
   bs <- newArray initSize undefined
-  HashTable
-    <$> newMutVar hs
-    <*> newMutVar bs
-    <*> newPrimRef 0
+  HashTable <$> newMutVar hs <*> newMutVar bs <*> newPrimRef 0
 
 -- | Insert a new key/value pair in the hash table.
 {-# INLINABLE insert #-}
@@ -181,10 +184,6 @@ capacity table = sizeofMutablePrimArray <$> readMutVar (hashes table)
 ----------------------
 -- Internal helpers --
 ----------------------
-
-{-# INLINABLE isPowerOfTwo #-}
-isPowerOfTwo :: Int -> Bool
-isPowerOfTwo i = i .&. (i - 1) == 0
 
 -- | The Int represents the index of the bucket. The unboxed sum represents (in this order):
 --
