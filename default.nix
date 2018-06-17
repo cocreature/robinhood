@@ -9,7 +9,11 @@ let
   pkgs = import nixpkgs {};
   haskellPackages = pkgs.haskell.packages.ghc843.override(old: {
     overrides = self: super: {
-      robinhood = pkgs.haskell.lib.doBenchmark (super.callCabal2nix "robinhood" ./. {});
+      robinhood = pkgs.haskell.lib.overrideCabal (super.callCabal2nix "robinhood" ./. {
+      }) (old: {
+        doBenchmark = true;
+        configureFlags = "--enable-benchmarks";
+      });
       primitive = super.callHackage "primitive" "0.6.4.0" {};
       vector-hashtables = super.callCabal2nix "vector-hashtables" (pkgs.fetchFromGitHub {
         owner = "klapaucius";
