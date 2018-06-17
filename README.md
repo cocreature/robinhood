@@ -1,5 +1,7 @@
 # robinhood
 
+[![CircleCI](https://circleci.com/gh/cocreature/robinhood.svg?style=svg)](https://circleci.com/gh/cocreature/robinhood)
+
 Haskell implementation of a linearly probed hash table using Robin Hood hashing.
 
 For a description of Robin Hood hashing take a look at the following two blog posts:
