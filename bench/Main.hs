@@ -159,6 +159,26 @@ htrd = do
                | otherwise = return ()
     go1 0
 
+vhtbd :: IO ()
+vhtbd = do
+    ht <- VH.initialize n :: IO (VH.Dictionary (PrimState IO) BV.MVector Int BV.MVector Int)
+    let go !i | i <= n = VH.insert ht i i >> go (i + 1)
+              | otherwise = return ()
+    go 0
+    let go1 !i | i <= n = VH.delete ht i >> go1 (i + 1)
+               | otherwise = return ()
+    go1 0
+
+vhtkd :: IO ()
+vhtkd = do
+    ht <- VH.initialize n :: IO (VH.Dictionary (PrimState IO) VM.MVector Int BV.MVector Int)
+    let go !i | i <= n = VH.insert ht i i >> go (i + 1)
+              | otherwise = return ()
+    go 0
+    let go1 !i | i <= n = VH.delete ht i >> go1 (i + 1)
+               | otherwise = return ()
+    go1 0
+
 vhtd :: IO ()
 vhtd = do
     ht <- VH.initialize n :: IO (VH.Dictionary (PrimState IO) VM.MVector Int VM.MVector Int)
@@ -185,6 +205,22 @@ rhfind :: RobinHood.IOHashTable Int Int -> IO Int
 rhfind ht = do
     let go !i !s | i <= n = do
                                 Just x <- RobinHood.lookup ht i
+                                go (i + 1) (s + x)
+                 | otherwise = return s
+    go 0 0
+
+vhfindb :: VH.Dictionary (PrimState IO) BV.MVector Int BV.MVector Int -> IO Int
+vhfindb ht = do
+    let go !i !s | i <= n = do
+                                x <- VH.findEntry ht i
+                                go (i + 1) (s + x)
+                 | otherwise = return s
+    go 0 0
+
+vhfindk :: VH.Dictionary (PrimState IO) VM.MVector Int BV.MVector Int -> IO Int
+vhfindk ht = do
+    let go !i !s | i <= n = do
+                                x <- VH.findEntry ht i
                                 go (i + 1) (s + x)
                  | otherwise = return s
     go 0 0
@@ -219,6 +255,22 @@ rh = do
     go 0
     return ht
 
+vhb :: IO (VH.Dictionary (PrimState IO) BV.MVector Int BV.MVector Int)
+vhb = do
+    ht <- VH.initialize n :: IO (VH.Dictionary (PrimState IO) BV.MVector Int BV.MVector Int)
+    let go !i | i <= n = VH.insert ht i i >> go (i + 1)
+              | otherwise = return ()
+    go 0
+    return ht
+
+vhk :: IO (VH.Dictionary (PrimState IO) VM.MVector Int BV.MVector Int)
+vhk = do
+    ht <- VH.initialize n :: IO (VH.Dictionary (PrimState IO) VM.MVector Int BV.MVector Int)
+    let go !i | i <= n = VH.insert ht i i >> go (i + 1)
+              | otherwise = return ()
+    go 0
+    return ht
+
 vh :: IO (VH.Dictionary (PrimState IO) VM.MVector Int VM.MVector Int)
 vh = do
     ht <- VH.initialize n :: IO (VH.Dictionary (PrimState IO) VM.MVector Int VM.MVector Int)
@@ -237,6 +289,8 @@ main :: IO ()
 main = do
   bh' <- bh
   rh' <- rh
+  vhb' <- vhb
+  vhk' <- vhk
   vh' <- vh
   fvh' <- fvh
   defaultMain
@@ -265,12 +319,16 @@ main = do
         "insert (delete)"
         [ bench "hashtables basic" $ nfIO htbd
         , bench "robinhood" $ nfIO htrd
+        , bench "vector-hashtables boxed   keys, boxed   values" $ nfIO vhtbd
+        , bench "vector-hashtables unboxed keys, unboxed values" $ nfIO vhtkd
         , bench "vector-hashtables unboxed keys, unboxed values" $ nfIO vhtd
         ]
     , bgroup
         "find"
         [ bench "hashtables basic" $ nfIO (bhfind bh')
         , bench "robinhood" $ nfIO (rhfind rh')
+        , bench "vector-hashtables boxed   keys, boxed   values" $ nfIO (vhfindb vhb')
+        , bench "vector-hashtables unboxed keys, boxed   values" $ nfIO (vhfindk vhk')
         , bench "vector-hashtables unboxed keys, unboxed values" $ nfIO (vhfind vh')
         , bench "vector-hashtables (frozen) unboxed keys, unboxed values" $ nfIO (fvhfind fvh')
         ]
