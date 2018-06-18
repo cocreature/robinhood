@@ -8,7 +8,7 @@ jobs:
       - checkout
       - restore_cache:
           key: nix-store
-      - run: nix-build
+      - run: nix-build --cores 0 -j auto
       - save_cache:
           key: nix-store
           when: always
