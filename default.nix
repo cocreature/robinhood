@@ -8,12 +8,17 @@ let
   };
   pkgs = import nixpkgs {};
   haskellPackages = pkgs.haskell.packages.ghc843.override(old: {
+    all-cabal-hashes = builtins.fetchurl {
+      url = "https://github.com/commercialhaskell/all-cabal-hashes/archive/e8599faa9bb6158597fa849fb9f466ee385fb0d9.tar.gz";
+      sha256 = "19h087c16hh8kksm73cifzizzg46dk2ww755xz2i95z2nks82div";
+    };
     overrides = self: super: {
       robinhood = pkgs.haskell.lib.overrideCabal (super.callCabal2nix "robinhood" ./. {
       }) (old: {
         doBenchmark = true;
         configureFlags = "--enable-benchmarks";
       });
+      contiguous = super.callHackage "contiguous" "0.2.0.0" {};
       primitive = super.callHackage "primitive" "0.6.4.0" {};
       vector-hashtables = super.callCabal2nix "vector-hashtables" (pkgs.fetchFromGitHub {
         owner = "klapaucius";
