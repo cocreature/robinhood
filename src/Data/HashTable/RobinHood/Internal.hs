@@ -2,7 +2,7 @@
 {-# LANGUAGE TypeInType #-}
 {-# LANGUAGE UnboxedSums #-}
 {-# LANGUAGE UnboxedTuples #-}
-module Data.HashTable.RobinHood
+module Data.HashTable.RobinHood.Internal
   ( SafeHash(..)
   , safeHash
   , emptyHash
@@ -10,7 +10,6 @@ module Data.HashTable.RobinHood
   , Bucket(..)
 
   , HashTable(..)
-  , IOHashTable
 
   , new
   , insert
@@ -34,7 +33,8 @@ import           Data.Bits
 import           Data.Foldable (for_)
 import           Data.Hashable (Hashable)
 import qualified Data.Hashable as Hashable
-import           Data.Primitive.Array hiding (fromList)
+import           Data.Primitive.Contiguous (Contiguous, Element, Mutable)
+import qualified Data.Primitive.Contiguous as Contiguous
 import           Data.Primitive.MutVar
 import           Data.Primitive.PrimArray
 import           Data.Primitive.PrimRef
@@ -58,13 +58,12 @@ safeHash a =
 
 data Bucket k v = Bucket !k v
 
-data HashTable s k v = HashTable
+data HashTable ak av s k v = HashTable
   { hashes :: {-# UNPACK #-}!(MutVar s (MutablePrimArray s SafeHash))
-  , buckets :: {-# UNPACK #-}!(MutVar s (MutableArray s (Bucket k v)))
+  , keys :: {-# UNPACK #-}!(MutVar s (Mutable ak s k))
+  , values :: {-# UNPACK #-}!(MutVar s (Mutable av s v))
   , numItems :: {-# UNPACK #-}!(PrimRef s Int)
-  } deriving Eq
-
-type IOHashTable k v = HashTable (PrimState IO) k v
+  } deriving (Eq)
 
 ----------------
 -- Public API --
@@ -72,7 +71,7 @@ type IOHashTable k v = HashTable (PrimState IO) k v
 
 -- @new capacity@ creates a new `HashTable` of the given capacity.
 {-# INLINABLE new #-}
-new :: PrimMonad m => Int -> m (HashTable (PrimState m) k v)
+new :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => Int -> m (HashTable ak av (PrimState m) k v)
 new requestedSize = do
   let initSize =
         if requestedSize < 0
@@ -80,48 +79,51 @@ new requestedSize = do
           else nextPowerOfTwo requestedSize
   hs <- newPrimArray initSize
   setPrimArray hs 0 initSize emptyHash
-  bs <- newArray initSize undefined
-  HashTable <$> newMutVar hs <*> newMutVar bs <*> newPrimRef 0
+  ks <- stToPrim (Contiguous.new initSize)
+  vs <- stToPrim (Contiguous.new initSize)
+  HashTable <$> newMutVar hs <*> newMutVar ks <*> newMutVar vs <*> newPrimRef 0
 
 -- | Insert a new key/value pair in the hash table.
 {-# INLINABLE insert #-}
-insert :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> v -> m ()
+insert :: (Eq k, Hashable k, PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => HashTable ak av (PrimState m) k v -> k -> v -> m ()
 insert table k v = do
   reserve table 1
   hs <- readMutVar (hashes table)
-  bs <- readMutVar (buckets table)
-  BucketFor i type' <- bucketFor hs bs h k
+  ks <- readMutVar (keys table)
+  vs <- readMutVar (values table)
+  BucketFor i type' <- bucketFor hs ks h k
   case type' of
-    (# (# #) | | #) -> writeArray bs i (Bucket k v)
+    (# (# #) | | #) -> stToPrim (Contiguous.write ks i k >> Contiguous.write vs i v)
     (# | (# #) | #) -> do
       n <- readPrimRef (numItems table)
       writePrimRef (numItems table) (n + 1)
       writePrimArray hs i h
-      writeArray bs i (Bucket k v)
+      stToPrim (Contiguous.write ks i k)
+      stToPrim (Contiguous.write vs i v)
     (# | | disp #) -> do
       n <- readPrimRef (numItems table)
       writePrimRef (numItems table) (n + 1)
-      robinHood hs bs h k v i (I# disp)
+      robinHood hs ks vs h k v i (I# disp)
   where
     !h = safeHash k
 
 -- | Lookup the value at a key in the hash table.
 {-# INLINABLE lookup #-}
-lookup :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> m (Maybe v)
+lookup :: (Eq k, Hashable k, PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => HashTable ak av (PrimState m) k v -> k -> m (Maybe v)
 lookup table k = do
   mayI <- findKey k table
   case mayI of
     Nothing -> pure Nothing
     Just i -> do
-      bs <- readMutVar (buckets table)
-      Bucket _ v <- readArray bs i
+      vs <- readMutVar (values table)
+      v <- stToPrim (Contiguous.read vs i)
       pure (Just v)
 
 -- | Delete the value at a key and return it.
 --
 -- If the key was not present in the hash table, `Nothing` is returned.
 {-# INLINABLE delete #-}
-delete :: (Eq k, Hashable k, PrimMonad m) => HashTable (PrimState m) k v -> k -> m (Maybe v)
+delete :: (Eq k, Hashable k, PrimMonad m, Contiguous av, Element av v, Contiguous ak, Element ak k) => HashTable ak av (PrimState m) k v -> k -> m (Maybe v)
 delete table k = do
   mayI <- findKey k table
   case mayI of
@@ -130,17 +132,19 @@ delete table k = do
       numItems' <- readPrimRef (numItems table)
       writePrimRef (numItems table) (numItems' - 1)
       hs <- readMutVar (hashes table)
-      bs <- readMutVar (buckets table)
-      Bucket _ v <- readArray bs pos
+      ks <- readMutVar (keys table)
+      vs <- readMutVar (values table)
+      v <- stToPrim (Contiguous.read vs pos)
       let !numBuckets = sizeofMutablePrimArray hs
           go i = do
             let !i' = nextBucket numBuckets i
             h <- readPrimArray hs i'
             if | h == emptyHash || displacement numBuckets h i' == 0 ->
-                 deleteEntry hs bs i
+                 deleteEntry hs ks vs i
                | otherwise -> do
-                   b <- readArray bs i'
-                   setEntry hs bs i h b
+                   k' <- stToPrim (Contiguous.read ks i')
+                   v' <- stToPrim (Contiguous.read vs i')
+                   setEntry hs ks vs i h k' v'
                    go i'
       go pos
       pure (Just v)
@@ -149,7 +153,7 @@ delete table k = do
 -- duplicate keys, the last value is the one stored in the final
 -- hashtable.
 {-# INLINABLE fromList #-}
-fromList :: (Eq k, Hashable k, PrimMonad m) => [(k, v)] -> m (HashTable (PrimState m) k v)
+fromList :: (Eq k, Hashable k, PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => [(k, v)] -> m (HashTable ak av (PrimState m) k v)
 fromList xs = do
   table <- new 0
   for_ xs $ \(k,v) -> insert table k v
@@ -158,27 +162,29 @@ fromList xs = do
 -- | Monadic map over the entries in the `HashTable`. No guarantees
 -- are made about the order in which the entries are traversed.
 {-# INLINABLE mapM_ #-}
-mapM_ :: PrimMonad m => (k -> v -> m a) -> HashTable (PrimState m) k v -> m ()
+mapM_ :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => (k -> v -> m a) -> HashTable ak av (PrimState m) k v -> m ()
 mapM_ f table = do
   hs <- readMutVar (hashes table)
-  bs <- readMutVar (buckets table)
+  ks <- readMutVar (keys table)
+  vs <- readMutVar (values table)
   for_ [0 .. sizeofMutablePrimArray hs - 1] $ \i -> do
     h <- readPrimArray hs i
     when (h /= emptyHash) $ do
-      Bucket k v <- readArray bs i
+      k <- stToPrim (Contiguous.read ks i)
+      v <- stToPrim (Contiguous.read vs i)
       _ <- f k v
       pure ()
 
 -- | Returns the number of entries that are currently in the
 -- `HashTable`.
 {-# INLINABLE size #-}
-size :: PrimMonad m => HashTable (PrimState m) k v -> m Int
+size :: PrimMonad m => HashTable ak av (PrimState m) k v -> m Int
 size table = readPrimRef (numItems table)
 
 -- | Returns the current capacity, i.e., the number of allocated
 -- buckets. This is guaranteed to be greater or equal to `size`.
 {-# INLINABLE capacity #-}
-capacity :: PrimMonad m => HashTable (PrimState m) k v -> m Int
+capacity :: PrimMonad m => HashTable ak av (PrimState m) k v -> m Int
 capacity table = sizeofMutablePrimArray <$> readMutVar (hashes table)
 
 ----------------------
@@ -194,8 +200,8 @@ capacity table = sizeofMutablePrimArray <$> readMutVar (hashes table)
 data BucketFor = BucketFor {-# UNPACK #-} !Int (# (# #) | (# #) | Int# #)
 
 {-# INLINABLE bucketFor #-}
-bucketFor :: (Eq k, PrimMonad m) => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> SafeHash -> k -> m BucketFor
-bucketFor hs bs h k = do
+bucketFor :: (Eq k, PrimMonad m, Contiguous ak, Element ak k) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> SafeHash -> k -> m BucketFor
+bucketFor hs ks h k = do
   let !numBuckets = sizeofMutablePrimArray hs
       go !i !currentDisplacement = do
         h' <- readPrimArray hs i
@@ -207,7 +213,7 @@ bucketFor hs bs h k = do
               then pure (BucketFor i (# | | disp #))
               else if h' == h
                      then do
-                       Bucket k' _ <- readArray bs i
+                       k' <- stToPrim (Contiguous.read ks i)
                        if k' == k
                          then pure (BucketFor i (# (# #) | | #))
                          else go (nextBucket numBuckets i) (currentDisplacement + 1)
@@ -219,19 +225,19 @@ bucketIndex :: Int -> SafeHash -> Int
 bucketIndex numBuckets (SafeHash h) = h .&. (numBuckets - 1)
 
 {-# INLINABLE robinHood #-}
-robinHood :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> SafeHash -> k -> v -> Int -> Int -> m ()
-robinHood hs bs !hash key value pos disp = go hash (Bucket key value) pos disp
+robinHood :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable av (PrimState m) v -> SafeHash -> k -> v -> Int -> Int -> m ()
+robinHood hs ks vs !hash key value pos disp = go hash key value pos disp
   where
-    go h b !i !d = do
-      (h', b') <- swapEntry hs bs i h b
+    go h k v !i !d = do
+      (h', k', v') <- swapEntry hs ks vs i h k v
       let go' !j !currentDisplacement = do
             h'' <- readPrimArray hs j
             if h'' == emptyHash
-              then setEntry hs bs j h' b'
+              then setEntry hs ks vs j h' k' v'
               else do
                 let !storedDisplacement = displacement numBuckets h'' j
                 if storedDisplacement < currentDisplacement
-                  then go h' b' j storedDisplacement
+                  then go h' k' v' j storedDisplacement
                   else go' (nextBucket numBuckets j) (currentDisplacement + 1)
       go' (nextBucket numBuckets i) (d + 1)
     !numBuckets = sizeofMutablePrimArray hs
@@ -251,33 +257,37 @@ logBase2 :: Int -> Int
 logBase2 x = finiteBitSize x - 1 - countLeadingZeros x
 
 {-# INLINABLE getEntry #-}
-getEntry :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> Int -> m (SafeHash, Bucket k v)
-getEntry hs bs i = do
+getEntry :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable  av (PrimState m) v -> Int -> m (SafeHash, k, v)
+getEntry hs ks vs i = do
   h <- readPrimArray hs i
-  b <- readArray bs i
-  pure (h, b)
+  k <- stToPrim (Contiguous.read ks i)
+  v <- stToPrim (Contiguous.read vs i)
+  pure (h, k, v)
 
 {-# INLINABLE setEntry #-}
-setEntry :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> Int -> SafeHash -> Bucket k v -> m ()
-setEntry hs bs i h b = do
+setEntry :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable av (PrimState m) v -> Int -> SafeHash -> k -> v -> m ()
+setEntry hs ks vs i h k v = do
   writePrimArray hs i h
-  writeArray bs i b
+  stToPrim (Contiguous.write ks i k)
+  stToPrim (Contiguous.write vs i v)
 
 {-# INLINABLE deleteEntry #-}
-deleteEntry :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> Int -> m ()
-deleteEntry hs bs i = do
+deleteEntry :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable av (PrimState m) v -> Int -> m ()
+deleteEntry hs _ks _vs i = do
   writePrimArray hs i emptyHash
-  writeArray bs i undefined
+  -- TODO For a boxed array, we want to set the ks and vs array to undefined
+  -- stToPrim (Contiguous.write ks i (error "undefined key"))
+  -- stToPrim (Contiguous.write vs i (error "undefined value"))
 
 {-# INLINABLE swapEntry #-}
-swapEntry :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> Int -> SafeHash -> Bucket k v -> m (SafeHash, Bucket k v)
-swapEntry hs bs i h b = do
-  (h', b') <- getEntry hs bs i
-  setEntry hs bs i h b
-  pure (h', b')
+swapEntry :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable av (PrimState m) v -> Int -> SafeHash -> k -> v -> m (SafeHash, k, v)
+swapEntry hs ks vs i h k v = do
+  (h', k', v') <- getEntry hs ks vs i
+  setEntry hs ks vs i h k v
+  pure (h', k', v')
 
 {-# INLINABLE reserve #-}
-reserve :: PrimMonad m => HashTable (PrimState m) k v -> Int -> m ()
+reserve :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => HashTable ak av (PrimState m) k v -> Int -> m ()
 reserve table !additionalElems = do
   hs <- readMutVar (hashes table)
   !currentNumItems <- readPrimRef (numItems table)
@@ -286,20 +296,24 @@ reserve table !additionalElems = do
       !remaining = capacity' numBuckets - currentNumItems
   when (remaining < additionalElems) $ do
     let !newNumBuckets = capacityFor newNumItems
-    bs <- readMutVar (buckets table)
+    ks <- readMutVar (keys table)
+    vs <- readMutVar (values table)
     hs' <- newPrimArray newNumBuckets
     setPrimArray hs' 0 newNumBuckets emptyHash
-    bs' <- newArray newNumBuckets undefined
+    ks' <- stToPrim (Contiguous.new newNumBuckets )
+    vs' <- stToPrim (Contiguous.new newNumBuckets)
     writeMutVar (hashes table) hs'
-    writeMutVar (buckets table) bs'
+    writeMutVar (keys table) ks'
+    writeMutVar (values table) vs'
     when (currentNumItems /= 0) $ do
       let go !i !toInsert = do
             h <- readPrimArray hs i
             if h == emptyHash
               then go (nextBucket numBuckets i) toInsert
               else do
-                b <- readArray bs i
-                orderedInsert hs' bs' h b
+                k <- stToPrim (Contiguous.read ks i)
+                v <- stToPrim (Contiguous.read vs i)
+                orderedInsert hs' ks' vs' h k v
                 when
                   (toInsert > 1)
                   (go (nextBucket numBuckets i) (toInsert - 1))
@@ -313,10 +327,10 @@ displacement numBuckets hash pos
   where !idealPos = bucketIndex numBuckets hash
 
 {-# INLINABLE findKey #-}
-findKey :: (Eq k, Hashable k, PrimMonad m) => k -> HashTable (PrimState m) k v -> m (Maybe Int)
+findKey :: (Eq k, Hashable k, PrimMonad m, Contiguous ak, Element ak k) => k -> HashTable ak av (PrimState m) k v -> m (Maybe Int)
 findKey k table = do
   hs <- readMutVar (hashes table)
-  bs <- readMutVar (buckets table)
+  ks <- readMutVar (keys table)
   let !numBuckets = sizeofMutablePrimArray hs
   if numBuckets == 0
     then pure Nothing
@@ -327,7 +341,7 @@ findKey k table = do
             if | storedHash == emptyHash -> pure Nothing
                | currentDisplacement > storedDisplacement -> pure Nothing
                | currentHash == storedHash -> do
-                   Bucket k' _ <- readArray bs i
+                   k' <- stToPrim (Contiguous.read ks i)
                    if k == k'
                      then pure (Just i)
                      else go (currentDisplacement + 1) (nextBucket numBuckets i)
@@ -355,12 +369,12 @@ firstIdeal hs = go 0
 
 -- | Insertion function used during reinsertion.
 {-# INLINABLE orderedInsert #-}
-orderedInsert :: PrimMonad m => MutablePrimArray (PrimState m) SafeHash -> MutableArray (PrimState m) (Bucket k v) -> SafeHash -> Bucket k v -> m ()
-orderedInsert hs bs h b = go (bucketIndex numBuckets h)
+orderedInsert :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable av (PrimState m) v ->SafeHash -> k -> v -> m ()
+orderedInsert hs ks vs h k v = go (bucketIndex numBuckets h)
   where
     !numBuckets = sizeofMutablePrimArray hs
     go !i = do
       h' <- readPrimArray hs i
       if h' == emptyHash
-        then setEntry hs bs i h b
+        then setEntry hs ks vs i h k v
         else go (nextBucket numBuckets i)

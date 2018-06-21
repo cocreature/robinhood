@@ -12,7 +12,7 @@ import qualified Data.Vector.Mutable as BV
 
 import qualified Data.HashTable.IO as H
 
-import qualified Data.HashTable.RobinHood as RobinHood
+import qualified Data.HashTable.RobinHood.Unboxed as RobinHood
 
 -- import qualified Data.HashMap.Strict as Map
 

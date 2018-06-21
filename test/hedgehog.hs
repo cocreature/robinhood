@@ -13,8 +13,8 @@ import           Hedgehog.Internal.Config
 import           Hedgehog.Internal.Runner
 import qualified Hedgehog.Range as Range
 
-import           Data.HashTable.RobinHood (IOHashTable)
-import qualified Data.HashTable.RobinHood as HashTable
+import           Data.HashTable.RobinHood.Unboxed (IOHashTable)
+import qualified Data.HashTable.RobinHood.Unboxed as HashTable
 
 newtype State v =
   State (Maybe (Var (Opaque (IOHashTable Int Int)) v, Map Int Int))

@@ -17,8 +17,10 @@ tested-with:         GHC == 8.4.3
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Data.HashTable.RobinHood
+  exposed-modules:     Data.HashTable.RobinHood.Unboxed
+                       Data.HashTable.RobinHood.Internal
   build-depends:       base >= 4.11 && < 5
+                     , contiguous
                      , hashable
                      , primitive >= 0.6.4
                      , prim-ref
@@ -35,7 +37,6 @@ test-suite hedgehog
   default-language:    Haskell2010
   build-depends:       base
                      , containers
-                     , contiguous
                      , hedgehog
                      , robinhood
 
