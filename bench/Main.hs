@@ -6,7 +6,6 @@ import           Gauge
 
 import qualified Data.Vector.Hashtables.Internal as VH
 import qualified Data.Vector.Storable.Mutable as VM
-import qualified Data.Vector.Storable as V
 
 import qualified Data.Vector.Mutable as BV
 
@@ -14,13 +13,10 @@ import qualified Data.HashTable.IO as H
 
 import qualified Data.HashTable.RobinHood.Unboxed as RobinHood
 
--- import qualified Data.HashMap.Strict as Map
-
-import           Control.Monad
 import           Control.Monad.Primitive
-import           Data.IORef
 
-n = 100000 :: Int
+n :: Int
+n = 100000
 
 ------------------------------
 -- Insert (preinitialized) ---
@@ -273,12 +269,6 @@ vh = do
     go 0
     return ht
 
-fvh :: IO (VH.FrozenDictionary V.Vector Int V.Vector Int)
-fvh = do
-    h <- vh
-    c <- VH.clone h
-    VH.unsafeFreeze c
-
 main :: IO ()
 main = do
   bh' <- bh
@@ -286,7 +276,6 @@ main = do
   vhb' <- vhb
   vhk' <- vhk
   vh' <- vh
-  fvh' <- fvh
   defaultMain
     [ bgroup
         "insert (preinitialized capacity)"
