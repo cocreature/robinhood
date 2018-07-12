@@ -7,10 +7,10 @@ jobs:
     steps:
       - checkout
       - restore_cache:
-          key: nix-store
+          key: v1-nix-store-{{ checksum "default.nix" }}
       - run: nix-build --cores 0 -j auto
       - save_cache:
-          key: nix-store
+          key: v1-nix-store-{{ checksum "default.nix" }}
           when: always
           paths:
             - /nix
