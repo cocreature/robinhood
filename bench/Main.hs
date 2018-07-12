@@ -233,12 +233,6 @@ vhfind ht = do
                  | otherwise = return s
     go 0 0
 
-fvhfind :: VH.FrozenDictionary V.Vector Int V.Vector Int -> IO Int
-fvhfind ht = return $ go 0 0 where
-    go !i !s | i <= n = go (i + 1) (s + VH.findElem ht i)
-             | otherwise = s
-
-
 bh :: IO (H.BasicHashTable Int Int)
 bh = do
     ht <- H.newSized n :: IO (H.BasicHashTable Int Int)
@@ -320,7 +314,7 @@ main = do
         [ bench "hashtables basic" $ nfIO htbd
         , bench "robinhood" $ nfIO htrd
         , bench "vector-hashtables boxed   keys, boxed   values" $ nfIO vhtbd
-        , bench "vector-hashtables unboxed keys, unboxed values" $ nfIO vhtkd
+        , bench "vector-hashtables unboxed keys, boxed   values" $ nfIO vhtkd
         , bench "vector-hashtables unboxed keys, unboxed values" $ nfIO vhtd
         ]
     , bgroup
@@ -330,6 +324,5 @@ main = do
         , bench "vector-hashtables boxed   keys, boxed   values" $ nfIO (vhfindb vhb')
         , bench "vector-hashtables unboxed keys, boxed   values" $ nfIO (vhfindk vhk')
         , bench "vector-hashtables unboxed keys, unboxed values" $ nfIO (vhfind vh')
-        , bench "vector-hashtables (frozen) unboxed keys, unboxed values" $ nfIO (fvhfind fvh')
         ]
     ]
