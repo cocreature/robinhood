@@ -1,6 +1,5 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE TypeInType #-}
-{-# LANGUAGE UnboxedSums #-}
 {-# LANGUAGE UnboxedTuples #-}
 module Data.HashTable.RobinHood.Internal
   ( SafeHash(..)
@@ -27,6 +26,7 @@ module Data.HashTable.RobinHood.Internal
 
 import           Prelude hiding (lookup, mapM_)
 
+import           Control.Exception
 import           Control.Monad hiding (mapM_)
 import           Control.Monad.Primitive
 import           Data.Bits
@@ -39,7 +39,6 @@ import           Data.Primitive.MutVar
 import           Data.Primitive.PrimArray
 import           Data.Primitive.PrimRef
 import           Data.Primitive.Types
-import           GHC.Exts (Int(..), Int#)
 
 -- | SafeHash needs to be able to store a special value representing
 -- empty buckets. We accomplish this by setting the 1 highest bits to
@@ -92,18 +91,18 @@ insert table k v = do
   ks <- readMutVar (keys table)
   vs <- readMutVar (values table)
   BucketFor i type' <- bucketFor hs ks h k
-  case type' of
-    (# (# #) | | #) -> stToPrim (Contiguous.write ks i k >> Contiguous.write vs i v)
-    (# | (# #) | #) -> do
-      n <- readPrimRef (numItems table)
-      writePrimRef (numItems table) (n + 1)
-      writePrimArray hs i h
-      stToPrim (Contiguous.write ks i k)
-      stToPrim (Contiguous.write vs i v)
-    (# | | disp #) -> do
-      n <- readPrimRef (numItems table)
-      writePrimRef (numItems table) (n + 1)
-      robinHood hs ks vs h k v i (I# disp)
+  if | type' .&. matchingKeyBit /= 0 ->
+       stToPrim (Contiguous.write ks i k >> Contiguous.write vs i v)
+     | type' .&. emptyBucketBit /= 0 ->
+       do n <- readPrimRef (numItems table)
+          writePrimRef (numItems table) (n + 1)
+          writePrimArray hs i h
+          stToPrim (Contiguous.write ks i k)
+          stToPrim (Contiguous.write vs i v)
+     | otherwise ->
+       do n <- readPrimRef (numItems table)
+          writePrimRef (numItems table) (n + 1)
+          robinHood hs ks vs h k v i type'
   where
     !h = safeHash k
 
@@ -191,13 +190,23 @@ capacity table = sizeofMutablePrimArray <$> readMutVar (hashes table)
 -- Internal helpers --
 ----------------------
 
--- | The Int represents the index of the bucket. The unboxed sum represents (in this order):
+-- | The first Int represents the index of the bucket, the second Int
+-- encodes one of three options.
 --
--- 1. A field with a matching key was found.
--- 2. An empty bucket was found.
--- 3. We found an element with a smaller displacement. The Int#
--- represents that displacement.
-data BucketFor = BucketFor {-# UNPACK #-} !Int (# (# #) | (# #) | Int# #)
+-- 1. If the highest bit is set, a field with a matching key was
+-- found.
+--
+-- 2. If the second-highest bit is set, an empty bucket was found.
+--
+-- 3. Otherwise we found an element with a smaller displacement and
+-- the Int represents that displacement.
+data BucketFor = BucketFor {-# UNPACK #-} !Int {-# UNPACK #-} !Int
+
+matchingKeyBit :: Int
+matchingKeyBit = 1 `shiftL` (finiteBitSize (undefined :: Int) - 1)
+
+emptyBucketBit :: Int
+emptyBucketBit = 1 `shiftL` (finiteBitSize (undefined :: Int) - 2)
 
 {-# INLINABLE bucketFor #-}
 bucketFor :: (Eq k, PrimMonad m, Contiguous ak, Element ak k) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> SafeHash -> k -> m BucketFor
@@ -206,16 +215,18 @@ bucketFor hs ks h k = do
       go !i !currentDisplacement = do
         h' <- readPrimArray hs i
         if h' == emptyHash
-          then pure (BucketFor i (# | (# #) | #))
+          then pure (BucketFor i emptyBucketBit)
           else do
-            let !storedDisplacement@(I# disp) = displacement numBuckets h' i
+            let !storedDisplacement = displacement numBuckets h' i
             if storedDisplacement < currentDisplacement
-              then pure (BucketFor i (# | | disp #))
+              then
+                assert (matchingKeyBit .&. storedDisplacement /= 0 && emptyBucketBit .&. storedDisplacement /= 0)
+                (pure (BucketFor i storedDisplacement))
               else if h' == h
                      then do
                        k' <- stToPrim (Contiguous.read ks i)
                        if k' == k
-                         then pure (BucketFor i (# (# #) | | #))
+                         then pure (BucketFor i matchingKeyBit)
                          else go (nextBucket numBuckets i) (currentDisplacement + 1)
                      else go (nextBucket numBuckets i) (currentDisplacement + 1)
   go (bucketIndex numBuckets h) 0
