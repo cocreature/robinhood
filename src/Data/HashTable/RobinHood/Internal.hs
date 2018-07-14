@@ -221,9 +221,9 @@ withBucketFor matchingKey emptyBucket smallerDisplacement hs !ks h !k = do
 bucketIndex :: Int -> SafeHash -> Int
 bucketIndex numBuckets (SafeHash h) = h .&. (numBuckets - 1)
 
-{-# INLINABLE robinHood #-}
+{-# INLINE robinHood #-}
 robinHood :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable av (PrimState m) v -> SafeHash -> k -> v -> Int -> Int -> m ()
-robinHood hs ks vs !hash key value pos disp = go hash key value pos disp
+robinHood !hs !ks !vs !hash !key value pos disp = go hash key value pos disp
   where
     go h k v !i !d = do
       (h', k', v') <- swapEntry hs ks vs i h k v
