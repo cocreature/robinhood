@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE TypeInType #-}
 {-# LANGUAGE UnboxedTuples #-}
@@ -84,25 +85,23 @@ new requestedSize = do
 -- | Insert a new key/value pair in the hash table.
 {-# INLINABLE insert #-}
 insert :: (Eq k, Hashable k, PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => HashTable ak av (PrimState m) k v -> k -> v -> m ()
-insert table k v = do
-  reserve table 1
-  hs <- readMutVar (hashes table)
-  ks <- readMutVar (keys table)
-  vs <- readMutVar (values table)
-  let matchingKey i =
-        stToPrim (Contiguous.write ks i k >> Contiguous.write vs i v)
-      emptyBucket i = do
-        n <- readPrimRef (numItems table)
-        writePrimRef (numItems table) (n + 1)
-        writePrimArray hs i h
-        stToPrim (Contiguous.write ks i k)
-        stToPrim (Contiguous.write vs i v)
-      smallerDisplacement i disp = do
-        n <- readPrimRef (numItems table)
-        writePrimRef (numItems table) (n + 1)
-        robinHood hs ks vs h k v i disp
-  withBucketFor matchingKey emptyBucket smallerDisplacement hs ks h k
+insert table k v =
+  withReserved continue table 1
   where
+    continue !hs !ks !vs = do
+      let matchingKey i =
+            stToPrim (Contiguous.write ks i k >> Contiguous.write vs i v)
+          emptyBucket i = do
+            n <- readPrimRef (numItems table)
+            writePrimRef (numItems table) (n + 1)
+            writePrimArray hs i h
+            stToPrim (Contiguous.write ks i k)
+            stToPrim (Contiguous.write vs i v)
+          smallerDisplacement i disp = do
+            n <- readPrimRef (numItems table)
+            writePrimRef (numItems table) (n + 1)
+            robinHood hs ks vs h k v i disp
+      withBucketFor matchingKey emptyBucket smallerDisplacement hs ks h k
     !h = safeHash k
 
 -- | Lookup the value at a key in the hash table.
@@ -284,18 +283,25 @@ swapEntry hs ks vs i h k v = do
   setEntry hs ks vs i h k v
   pure (h', k', v')
 
-{-# INLINABLE reserve #-}
-reserve :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => HashTable ak av (PrimState m) k v -> Int -> m ()
-reserve table !additionalElems = do
+{-# INLINE withReserved #-}
+withReserved ::
+     (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v)
+  => (MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable av (PrimState m) v -> m a)
+  -> HashTable ak av (PrimState m) k v
+  -> Int
+  -> m a
+withReserved continue table !additionalElems = do
   hs <- readMutVar (hashes table)
+  ks <- readMutVar (keys table)
+  vs <- readMutVar (values table)
   !currentNumItems <- readPrimRef (numItems table)
   let !numBuckets = sizeofMutablePrimArray hs
       !newNumItems = currentNumItems + additionalElems
       !remaining = capacity' numBuckets - currentNumItems
-  when (remaining < additionalElems) $ do
+  if (remaining >= additionalElems)
+    then continue hs ks vs
+    else do
     let !newNumBuckets = capacityFor newNumItems
-    ks <- readMutVar (keys table)
-    vs <- readMutVar (values table)
     hs' <- newPrimArray newNumBuckets
     setPrimArray hs' 0 newNumBuckets emptyHash
     ks' <- stToPrim (Contiguous.new newNumBuckets )
@@ -317,6 +323,7 @@ reserve table !additionalElems = do
                   (go (nextBucket numBuckets i) (toInsert - 1))
       start <- firstIdeal hs
       go start currentNumItems
+    continue hs' ks' vs'
 
 displacement :: Int -> SafeHash -> Int -> Int
 displacement numBuckets hash pos
