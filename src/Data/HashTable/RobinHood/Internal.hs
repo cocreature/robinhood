@@ -108,7 +108,9 @@ insert table k v =
 {-# INLINABLE lookup #-}
 lookup :: (Eq k, Hashable k, PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => HashTable ak av (PrimState m) k v -> k -> m (Maybe v)
 lookup table k = do
-  mayI <- findKey k table
+  hs <- readMutVar (hashes table)
+  ks <- readMutVar (keys table)
+  mayI <- findKey k hs ks
   case mayI of
     Nothing -> pure Nothing
     Just i -> do
@@ -122,14 +124,14 @@ lookup table k = do
 {-# INLINABLE delete #-}
 delete :: (Eq k, Hashable k, PrimMonad m, Contiguous av, Element av v, Contiguous ak, Element ak k) => HashTable ak av (PrimState m) k v -> k -> m (Maybe v)
 delete table k = do
-  mayI <- findKey k table
+  hs <- readMutVar (hashes table)
+  ks <- readMutVar (keys table)
+  mayI <- findKey k hs ks
   case mayI of
     Nothing -> pure Nothing
     Just pos -> do
       numItems' <- readPrimRef (numItems table)
       writePrimRef (numItems table) (numItems' - 1)
-      hs <- readMutVar (hashes table)
-      ks <- readMutVar (keys table)
       vs <- readMutVar (values table)
       v <- stToPrim (Contiguous.read vs pos)
       let !numBuckets = sizeofMutablePrimArray hs
@@ -328,10 +330,8 @@ displacement numBuckets hash pos
   where !idealPos = bucketIndex numBuckets hash
 
 {-# INLINABLE findKey #-}
-findKey :: (Eq k, Hashable k, PrimMonad m, Contiguous ak, Element ak k) => k -> HashTable ak av (PrimState m) k v -> m (Maybe Int)
-findKey k table = do
-  hs <- readMutVar (hashes table)
-  ks <- readMutVar (keys table)
+findKey :: (Eq k, Hashable k, PrimMonad m, Contiguous ak, Element ak k) => k -> MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> m (Maybe Int)
+findKey k hs !ks = do
   let !numBuckets = sizeofMutablePrimArray hs
   if numBuckets == 0
     then pure Nothing
