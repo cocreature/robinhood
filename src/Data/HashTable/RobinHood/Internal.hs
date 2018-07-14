@@ -279,8 +279,12 @@ deleteEntry hs _ks _vs i = do
 {-# INLINABLE swapEntry #-}
 swapEntry :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable av (PrimState m) v -> Int -> SafeHash -> k -> v -> m (SafeHash, k, v)
 swapEntry hs ks vs i h k v = do
-  (h', k', v') <- getEntry hs ks vs i
-  setEntry hs ks vs i h k v
+  h' <- readPrimArray hs i
+  writePrimArray hs i h
+  k' <- stToPrim (Contiguous.read ks i)
+  stToPrim (Contiguous.write ks i k)
+  v' <- stToPrim (Contiguous.read vs i)
+  stToPrim (Contiguous.write vs i v)
   pure (h', k', v')
 
 {-# INLINE withReserved #-}
