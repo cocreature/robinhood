@@ -253,14 +253,6 @@ nextPowerOfTwo i = 2 ^ (logBase2 (i - 1) + 1)
 logBase2 :: Int -> Int
 logBase2 x = finiteBitSize x - 1 - countLeadingZeros x
 
-{-# INLINABLE getEntry #-}
-getEntry :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable  av (PrimState m) v -> Int -> m (SafeHash, k, v)
-getEntry hs ks vs i = do
-  h <- readPrimArray hs i
-  k <- stToPrim (Contiguous.read ks i)
-  v <- stToPrim (Contiguous.read vs i)
-  pure (h, k, v)
-
 {-# INLINABLE setEntry #-}
 setEntry :: (PrimMonad m, Contiguous ak, Element ak k, Contiguous av, Element av v) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> Mutable av (PrimState m) v -> Int -> SafeHash -> k -> v -> m ()
 setEntry hs ks vs i h k v = do
