@@ -210,7 +210,7 @@ emptyBucketBit = 1 `shiftL` (finiteBitSize (undefined :: Int) - 2)
 
 {-# INLINABLE bucketFor #-}
 bucketFor :: (Eq k, PrimMonad m, Contiguous ak, Element ak k) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> SafeHash -> k -> m BucketFor
-bucketFor hs ks h k = do
+bucketFor hs !ks h !k = do
   let !numBuckets = sizeofMutablePrimArray hs
       go !i !currentDisplacement = do
         h' <- readPrimArray hs i
