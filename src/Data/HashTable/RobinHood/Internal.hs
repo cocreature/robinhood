@@ -329,7 +329,7 @@ displacement numBuckets hash pos
   | otherwise = pos + (numBuckets - idealPos)
   where !idealPos = bucketIndex numBuckets hash
 
-{-# INLINABLE findKey #-}
+{-# INLINE findKey #-}
 findKey :: (Eq k, Hashable k, PrimMonad m, Contiguous ak, Element ak k) => k -> MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> m (Maybe Int)
 findKey k hs !ks = do
   let !numBuckets = sizeofMutablePrimArray hs
