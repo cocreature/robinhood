@@ -90,7 +90,7 @@ insert table k v = do
   hs <- readMutVar (hashes table)
   ks <- readMutVar (keys table)
   vs <- readMutVar (values table)
-  BucketFor i type' <- bucketFor hs ks h k
+  !(BucketFor i type') <- bucketFor hs ks h k
   if | type' .&. matchingKeyBit /= 0 ->
        stToPrim (Contiguous.write ks i k >> Contiguous.write vs i v)
      | type' .&. emptyBucketBit /= 0 ->
@@ -215,20 +215,19 @@ bucketFor hs ks h k = do
       go !i !currentDisplacement = do
         h' <- readPrimArray hs i
         if h' == emptyHash
-          then pure (BucketFor i emptyBucketBit)
+          then pure $! BucketFor i emptyBucketBit
           else do
             let !storedDisplacement = displacement numBuckets h' i
-            if storedDisplacement < currentDisplacement
-              then
-                assert (matchingKeyBit .&. storedDisplacement /= 0 && emptyBucketBit .&. storedDisplacement /= 0)
-                (pure (BucketFor i storedDisplacement))
-              else if h' == h
-                     then do
-                       k' <- stToPrim (Contiguous.read ks i)
-                       if k' == k
-                         then pure (BucketFor i matchingKeyBit)
-                         else go (nextBucket numBuckets i) (currentDisplacement + 1)
+            if | storedDisplacement < currentDisplacement ->
+                   assert (matchingKeyBit .&. storedDisplacement == 0 && emptyBucketBit .&. storedDisplacement == 0)
+                   (pure $! BucketFor i storedDisplacement)
+               | h' == h -> do
+                   k' <- stToPrim (Contiguous.read ks i)
+                   if k' == k
+                     then pure $! BucketFor i matchingKeyBit
                      else go (nextBucket numBuckets i) (currentDisplacement + 1)
+               | otherwise ->
+                   go (nextBucket numBuckets i) (currentDisplacement + 1)
   go (bucketIndex numBuckets h) 0
 
 {-# INLINABLE bucketIndex #-}
