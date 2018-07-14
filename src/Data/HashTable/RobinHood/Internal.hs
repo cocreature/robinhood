@@ -26,7 +26,6 @@ module Data.HashTable.RobinHood.Internal
 
 import           Prelude hiding (lookup, mapM_)
 
-import           Control.Exception
 import           Control.Monad hiding (mapM_)
 import           Control.Monad.Primitive
 import           Data.Bits
@@ -189,24 +188,6 @@ capacity table = sizeofMutablePrimArray <$> readMutVar (hashes table)
 ----------------------
 -- Internal helpers --
 ----------------------
-
--- | The first Int represents the index of the bucket, the second Int
--- encodes one of three options.
---
--- 1. If the highest bit is set, a field with a matching key was
--- found.
---
--- 2. If the second-highest bit is set, an empty bucket was found.
---
--- 3. Otherwise we found an element with a smaller displacement and
--- the Int represents that displacement.
-data BucketFor = BucketFor {-# UNPACK #-} !Int {-# UNPACK #-} !Int
-
-matchingKeyBit :: Int
-matchingKeyBit = 1 `shiftL` (finiteBitSize (undefined :: Int) - 1)
-
-emptyBucketBit :: Int
-emptyBucketBit = 1 `shiftL` (finiteBitSize (undefined :: Int) - 2)
 
 {-# INLINABLE withBucketFor #-}
 withBucketFor ::
