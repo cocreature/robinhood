@@ -90,19 +90,19 @@ insert table k v = do
   hs <- readMutVar (hashes table)
   ks <- readMutVar (keys table)
   vs <- readMutVar (values table)
-  !(BucketFor i type') <- bucketFor hs ks h k
-  if | type' .&. matchingKeyBit /= 0 ->
-       stToPrim (Contiguous.write ks i k >> Contiguous.write vs i v)
-     | type' .&. emptyBucketBit /= 0 ->
-       do n <- readPrimRef (numItems table)
-          writePrimRef (numItems table) (n + 1)
-          writePrimArray hs i h
-          stToPrim (Contiguous.write ks i k)
-          stToPrim (Contiguous.write vs i v)
-     | otherwise ->
-       do n <- readPrimRef (numItems table)
-          writePrimRef (numItems table) (n + 1)
-          robinHood hs ks vs h k v i type'
+  let matchingKey i =
+        stToPrim (Contiguous.write ks i k >> Contiguous.write vs i v)
+      emptyBucket i = do
+        n <- readPrimRef (numItems table)
+        writePrimRef (numItems table) (n + 1)
+        writePrimArray hs i h
+        stToPrim (Contiguous.write ks i k)
+        stToPrim (Contiguous.write vs i v)
+      smallerDisplacement i disp = do
+        n <- readPrimRef (numItems table)
+        writePrimRef (numItems table) (n + 1)
+        robinHood hs ks vs h k v i disp
+  withBucketFor matchingKey emptyBucket smallerDisplacement hs ks h k
   where
     !h = safeHash k
 
@@ -208,23 +208,30 @@ matchingKeyBit = 1 `shiftL` (finiteBitSize (undefined :: Int) - 1)
 emptyBucketBit :: Int
 emptyBucketBit = 1 `shiftL` (finiteBitSize (undefined :: Int) - 2)
 
-{-# INLINABLE bucketFor #-}
-bucketFor :: (Eq k, PrimMonad m, Contiguous ak, Element ak k) => MutablePrimArray (PrimState m) SafeHash -> Mutable ak (PrimState m) k -> SafeHash -> k -> m BucketFor
-bucketFor hs !ks h !k = do
+{-# INLINABLE withBucketFor #-}
+withBucketFor ::
+     (Eq k, PrimMonad m, Contiguous ak, Element ak k)
+  => (Int -> m a)
+  -> (Int -> m a)
+  -> (Int -> Int -> m a)
+  -> MutablePrimArray (PrimState m) SafeHash
+  -> Mutable ak (PrimState m) k
+  -> SafeHash
+  -> k
+  -> m a
+withBucketFor matchingKey emptyBucket smallerDisplacement hs !ks h !k = do
   let !numBuckets = sizeofMutablePrimArray hs
       go !i !currentDisplacement = do
         h' <- readPrimArray hs i
         if h' == emptyHash
-          then pure $! BucketFor i emptyBucketBit
+          then emptyBucket i
           else do
             let !storedDisplacement = displacement numBuckets h' i
-            if | storedDisplacement < currentDisplacement ->
-                   assert (matchingKeyBit .&. storedDisplacement == 0 && emptyBucketBit .&. storedDisplacement == 0)
-                   (pure $! BucketFor i storedDisplacement)
+            if | storedDisplacement < currentDisplacement -> smallerDisplacement i storedDisplacement
                | h' == h -> do
                    k' <- stToPrim (Contiguous.read ks i)
                    if k' == k
-                     then pure $! BucketFor i matchingKeyBit
+                     then matchingKey i
                      else go (nextBucket numBuckets i) (currentDisplacement + 1)
                | otherwise ->
                    go (nextBucket numBuckets i) (currentDisplacement + 1)
