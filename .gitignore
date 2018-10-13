@@ -4,3 +4,5 @@ dist-newstyle
 .ghc.environment.*
 cabal.project.local
 result*
+*.json
+*.svg

@@ -1,19 +1,16 @@
-{-# LANGUAGE BangPatterns, TypeFamilies #-}
+{-# LANGUAGE BangPatterns, ExistentialQuantification, TypeFamilies #-}
 
 module Main (main) where
 
-import           Gauge
-
-import qualified Data.Vector.Hashtables.Internal as VH
-import qualified Data.Vector.Storable.Mutable as VM
-
-import qualified Data.Vector.Mutable as BV
-
-import qualified Data.HashTable.IO as H
-
-import qualified Data.HashTable.RobinHood.Unboxed as RobinHood
-
+import           Control.DeepSeq
 import           Control.Monad.Primitive
+import qualified Criterion.Main as Criterion
+import           Criterion.Main hiding (Benchmark)
+import qualified Data.HashTable.IO as H
+import qualified Data.HashTable.RobinHood.Unboxed as RobinHood
+import qualified Data.Vector.Hashtables.Internal as VH
+import qualified Data.Vector.Mutable as BV
+import qualified Data.Vector.Storable.Mutable as VM
 
 n :: Int
 n = 100000
@@ -189,21 +186,57 @@ vhtd = do
 --- Find ---
 ------------
 
-bhfind :: H.BasicHashTable Int Int -> IO Int
-bhfind ht = do
-    let go !i !s | i <= n = do
-                                Just x <- H.lookup ht i
-                                go (i + 1) (s + x)
-                 | otherwise = return s
-    go 0 0
+newtype WHNF a = WHNF a
 
-rhfind :: RobinHood.IOHashTable Int Int -> IO Int
-rhfind ht = do
-    let go !i !s | i <= n = do
-                                Just x <- RobinHood.lookup ht i
-                                go (i + 1) (s + x)
-                 | otherwise = return s
-    go 0 0
+instance NFData (WHNF a) where
+  rnf (WHNF a) = seq a ()
+
+
+data Benchmark b = forall a. NFData a => Benchmark
+  { bmName :: String
+  , bmSetup :: Int -> IO a
+  , bmRun :: Int -> a -> IO b
+  }
+
+findBH :: Benchmark Int
+findBH = Benchmark "hashtables basic" table find
+  where
+    table :: Int -> IO (WHNF (H.BasicHashTable Int Int))
+    table n = do
+      ht <- H.newSized n :: IO (H.BasicHashTable Int Int)
+      let go !i
+            | i <= n = H.insert ht i i >> go (i + 1)
+            | otherwise = return ()
+      go 0
+      return (WHNF ht)
+    find :: Int -> WHNF (H.BasicHashTable Int Int) -> IO Int
+    find n (WHNF ht) = do
+      let go !i !s
+            | i <= n = do
+              Just x <- H.lookup ht i
+              go (i + 1) (s + x)
+            | otherwise = return s
+      go 0 0
+
+findRH :: Benchmark Int
+findRH = Benchmark "robinhood" table find
+  where
+    table :: Int -> IO (WHNF (RobinHood.IOHashTable Int Int))
+    table n = do
+      ht <- RobinHood.new n :: IO (RobinHood.IOHashTable Int Int)
+      let go !i
+            | i <= n = RobinHood.insert ht i i >> go (i + 1)
+            | otherwise = return ()
+      go 0
+      return (WHNF ht)
+    find :: Int -> WHNF (RobinHood.IOHashTable Int Int) -> IO Int
+    find n (WHNF ht) = do
+      let go !i !s
+            | i <= n = do
+              Just x <- RobinHood.lookup ht i
+              go (i + 1) (s + x)
+            | otherwise = return s
+      go 0 0
 
 vhfindb :: VH.Dictionary (PrimState IO) BV.MVector Int BV.MVector Int -> IO Int
 vhfindb ht = do
@@ -229,21 +262,6 @@ vhfind ht = do
                  | otherwise = return s
     go 0 0
 
-bh :: IO (H.BasicHashTable Int Int)
-bh = do
-    ht <- H.newSized n :: IO (H.BasicHashTable Int Int)
-    let go !i | i <= n = H.insert ht i i >> go (i + 1)
-              | otherwise = return ()
-    go 0
-    return ht
-
-rh :: IO (RobinHood.IOHashTable Int Int)
-rh = do
-    ht <- RobinHood.new n :: IO (RobinHood.IOHashTable Int Int)
-    let go !i | i <= n = RobinHood.insert ht i i >> go (i + 1)
-              | otherwise = return ()
-    go 0
-    return ht
 
 vhb :: IO (VH.Dictionary (PrimState IO) BV.MVector Int BV.MVector Int)
 vhb = do
@@ -270,12 +288,13 @@ vh = do
     return ht
 
 main :: IO ()
-main = do
-  bh' <- bh
-  rh' <- rh
-  vhb' <- vhb
-  vhk' <- vhk
-  vh' <- vh
+main
+  -- bh' <- bh
+  -- rh' <- rh
+  -- vhb' <- vhb
+  -- vhk' <- vhk
+  -- vh' <- vh
+ = do
   defaultMain
     [ bgroup
         "insert (preinitialized capacity)"
@@ -306,12 +325,12 @@ main = do
         , bench "vector-hashtables unboxed keys, boxed   values" $ nfIO vhtkd
         , bench "vector-hashtables unboxed keys, unboxed values" $ nfIO vhtd
         ]
-    , bgroup
-        "find"
-        [ bench "hashtables basic" $ nfIO (bhfind bh')
-        , bench "robinhood" $ nfIO (rhfind rh')
-        , bench "vector-hashtables boxed   keys, boxed   values" $ nfIO (vhfindb vhb')
-        , bench "vector-hashtables unboxed keys, boxed   values" $ nfIO (vhfindk vhk')
-        , bench "vector-hashtables unboxed keys, unboxed values" $ nfIO (vhfind vh')
-        ]
+    , bgroup "find" (map handleBench [findBH, findRH])
     ]
+
+handleBench :: NFData a => Benchmark a -> Criterion.Benchmark
+handleBench (Benchmark name setup run) =
+  bgroup name $
+    flip map [10, 100, 1000, 10000, 100000, 1000000] $ \n ->
+      env (setup n) $ \a ->
+        bench (show n) (nfIO (run n a))
